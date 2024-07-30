@@ -61,14 +61,33 @@ import lxt.functional as lf
 import lxt.rules as rules
 from lxt.core import Composite
 
+
+class AttentionValueMatmul(nn.Module):
+    def forward(self, attn, value):
+        return torch.matmul(attn, value)
+
+
 attnlrp = Composite(
     {
         nn.ReLU: rules.IdentityRule,
         nn.Tanh: rules.IdentityRule,
-        # nn.Linear: rules.EpsilonRule,
-        lm.LoraLinear: lm.LoraLinearLRP,
-        nn.Linear: lm.LinearEpsilon,
+        nn.Linear: rules.EpsilonRule,
+        # lm.LoraLinear: lm.LoraLinearLRP,
+        # nn.Linear: lm.LinearEpsilon,
         GELUActivation: rules.IdentityRule,
+        nn.Softmax: lm.SoftmaxDT,
+        AttentionValueMatmul: rules.UniformEpsilonRule,
+    }
+)
+
+cp_lrp = Composite(
+    {
+        nn.ReLU: rules.StopRelevanceRule,
+        nn.Tanh: rules.IdentityRule,
+        GELUActivation: rules.StopRelevanceRule,
+        nn.Linear: rules.EpsilonRule,
+        nn.Softmax: rules.StopRelevanceRule,
+        AttentionValueMatmul: rules.EpsilonRule,
     }
 )
 
@@ -309,6 +328,9 @@ class BertSelfAttention(nn.Module):
         self.key = nn.Linear(config.hidden_size, self.all_head_size)
         self.value = nn.Linear(config.hidden_size, self.all_head_size)
 
+        self.softmax = nn.Softmax(dim=-1)
+        self.attn_value_matmul = AttentionValueMatmul()
+
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
         self.position_embedding_type = position_embedding_type or getattr(
             config, "position_embedding_type", "absolute"
@@ -433,7 +455,7 @@ class BertSelfAttention(nn.Module):
             attention_scores = lf.add2(attention_scores, attention_mask)
 
         # Normalize the attention scores to probabilities.
-        attention_probs = lf.softmax(attention_scores, dim=-1)
+        attention_probs = self.softmax(attention_scores)
 
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
@@ -443,7 +465,8 @@ class BertSelfAttention(nn.Module):
         if head_mask is not None:
             attention_probs = lf.mul2(attention_probs, head_mask)
 
-        context_layer = lf.matmul(attention_probs, value_layer)
+        # context_layer = lf.matmul(attention_probs, value_layer)
+        context_layer = self.attn_value_matmul(attention_probs, value_layer)
 
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
@@ -1727,7 +1750,6 @@ class BertForSequenceClassification(BertPreTrainedModel):
         super().__init__(config)
         self.num_labels = config.num_labels
         self.config = config
-
         self.bert = BertModel(config)
         classifier_dropout = (
             config.classifier_dropout

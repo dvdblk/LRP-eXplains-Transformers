@@ -144,7 +144,7 @@ class Composite:
                 child, layer_type
             ):
                 if isinstance(child, rule):
-                    print(f"Skipping {name} because it is already a {rule.__name__}")
+                    # print(f"Skipping {name} because it is already a {rule.__name__}")
                     continue
                 elif issubclass(rule, WrapModule):
                     # replace module with LXT.rules.WrapModule and attach it to parent as attribute

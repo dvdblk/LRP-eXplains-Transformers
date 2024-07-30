@@ -25,9 +25,7 @@ def test_epsilon_rule():
 
 
 if __name__ == "__main__":
-    
+
     test_epsilon_rule()
-    
+
     print("ALL TESTS PASSED")
-
-

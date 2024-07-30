@@ -5,26 +5,64 @@ import torch
 import subprocess
 from pathlib import Path
 
+
 def _apply_colormap(relevance, cmap):
-    
-    colormap = cm.get_cmap(cmap)
+    # check if cmap is already a colormap object
+    if isinstance(cmap, colors.Colormap):
+        colormap = cmap
+    else:
+        colormap = cm.get_cmap(cmap)
     return colormap(colors.Normalize(vmin=-1, vmax=1)(relevance))
 
-def _generate_latex(words, relevances, cmap="bwr"):
+
+def emphasize_deviations(values):
+    mean_val = torch.mean(values)
+    std_val = torch.std(values)
+    return (values - mean_val) / std_val
+
+
+def emphasize_deviations_from_zero(values):
+    std_val = torch.std(values)
+    return values / std_val
+
+
+def emphasize_deviations_separate(values):
+    positive_values = values[values > 0]
+    negative_values = values[values < 0]
+
+    if len(positive_values) > 0:
+        pos_mean = torch.mean(positive_values)
+        pos_std = torch.std(positive_values)
+        positive_values = (positive_values - pos_mean) / pos_std
+
+    if len(negative_values) > 0:
+        neg_mean = torch.mean(negative_values)
+        neg_std = torch.std(negative_values)
+        negative_values = (negative_values - neg_mean) / neg_std
+
+    result = torch.zeros_like(values)
+    result[values > 0] = positive_values
+    result[values < 0] = negative_values
+    return result
+
+
+def _generate_latex(words, relevances, cmap="bwr", emphasize_deviations=False):
     """
     Generate LaTeX code for a sentence with colored words based on their relevances.
     """
 
     # Generate LaTeX code
-    latex_code = r'''
-    \documentclass[arwidth=200mm]{standalone} 
+    latex_code = r"""
+    \documentclass[arwidth=200mm]{standalone}
     \usepackage[dvipsnames]{xcolor}
-    
+
     \begin{document}
     \fbox{
     \parbox{\textwidth}{
     \setlength\fboxsep{0pt}
-    '''
+    """
+    if emphasize_deviations:
+        relevances = emphasize_deviations_from_zero(relevances)
 
     for word, relevance in zip(words, relevances):
         rgb = _apply_colormap(relevance, cmap)
@@ -36,17 +74,16 @@ def _generate_latex(words, relevances, cmap="bwr"):
         else:
             latex_code += f'\\colorbox[RGB]{{{r},{g},{b}}}{{\\strut {word}}}'
 
-
     latex_code += r'}}\end{document}'
 
     return latex_code
 
-    
+
 def _compile_latex_to_pdf(latex_code, path='word_colors.pdf', delete_aux_files=True, backend='xelatex'):
     """
     Compile LaTeX code to a PDF file using pdflatex or xelatex.
     """
-    
+
     # Save LaTeX code to a file
     path = Path(path)
     os.makedirs(path.parent, exist_ok=True)
@@ -60,14 +97,22 @@ def _compile_latex_to_pdf(latex_code, path='word_colors.pdf', delete_aux_files=T
     elif backend == 'xelatex':
         subprocess.call(['xelatex', '--output-directory', path.parent, path.with_suffix(".tex")])
 
-    print("PDF file generated successfully.")
+    # print("PDF file generated successfully.")
 
     if delete_aux_files:
         for suffix in ['.aux', '.log', '.tex']:
             os.remove(path.with_suffix(suffix))
 
 
-def pdf_heatmap(words, relevances, cmap="bwr", path='heatmap.pdf', delete_aux_files=True, backend='xelatex'):
+def pdf_heatmap(
+    words,
+    relevances,
+    cmap="bwr",
+    emphasize_deviations=False,
+    path="heatmap.pdf",
+    delete_aux_files=True,
+    backend="xelatex",
+):
     """
     Generate a PDF file with a heatmap of the relevances of the words in a sentence using LaTeX.
 
@@ -77,8 +122,11 @@ def pdf_heatmap(words, relevances, cmap="bwr", path='heatmap.pdf', delete_aux_fi
         The words in the sentence.
     relevances : list of float
         The relevances of the words normalized between -1 and 1.
-    cmap : str
-        The name of the colormap to use.
+    cmap : Union[str, colors.Colormap]
+        The name of the colormap to use or a matplotlib colormap object.
+    emphasize_deviations : bool
+        Whether to emphasize the deviations of the relevances from the mean. Useful for SHAP values
+        with bad distribution.
     path : str
         The path to save the PDF file.
     delete_aux_files : bool
@@ -90,7 +138,9 @@ def pdf_heatmap(words, relevances, cmap="bwr", path='heatmap.pdf', delete_aux_fi
     assert len(words) == len(relevances), "The number of words and relevances must be the same."
     assert relevances.min() >= -1 and relevances.max() <= 1, "The relevances must be normalized between -1 and 1."
 
-    latex_code = _generate_latex(words, relevances, cmap=cmap)
+    latex_code = _generate_latex(
+        words, relevances, cmap=cmap, emphasize_deviations=emphasize_deviations
+    )
     _compile_latex_to_pdf(latex_code, path=path, delete_aux_files=delete_aux_files, backend=backend)
 
 
@@ -104,4 +154,3 @@ def clean_tokens(words):
                 words[i] = word.replace(special_character, '\\' + special_character)
 
     return words
-
